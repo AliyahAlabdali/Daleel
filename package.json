@@ -1,0 +1,9 @@
+{
+  "name": "rag-ai-assistant-workflows",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:workflows": "node scripts/build_workflows.mjs",
+    "test": "node --test tests/static.test.mjs tests/evaluate.test.mjs tests/publication.test.mjs"
+  }
+}

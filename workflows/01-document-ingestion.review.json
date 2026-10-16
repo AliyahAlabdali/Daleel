@@ -1,0 +1,604 @@
+{
+  "name": "RAG | 1. Document Ingestion & Indexing (review copy)",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "RAG Knowledge Base - Upload Documents",
+        "formDescription": "Upload up to 3 PDF, TXT, or MD files, 5 MiB each. Files with the same category and filename replace earlier versions only after indexing succeeds.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Documents",
+              "fieldType": "file",
+              "fieldName": "documents",
+              "acceptFileTypes": ".pdf,.txt,.md",
+              "requiredField": true,
+              "multipleFiles": true
+            },
+            {
+              "fieldLabel": "Category (optional)",
+              "fieldName": "category",
+              "placeholder": "e.g. handbook, research, policy"
+            }
+          ]
+        },
+        "options": {
+          "buttonLabel": "Index documents",
+          "path": "rag-upload",
+          "respondWithOptions": {
+            "values": {
+              "formSubmittedText": "Processing finished. Review the workflow execution for each file result."
+            }
+          },
+          "includeUserInOutput": false
+        },
+        "authentication": "n8nUserAuth",
+        "requireExecuteAccess": true,
+        "responseMode": "lastNode"
+      },
+      "id": "0d8dfb16-ca31-4ba4-a335-f87c5b884c77",
+      "name": "Upload Documents Form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        0,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validate the entire submission before extracting or embedding any file.\nconst MAX_FILES = 3;\nconst MAX_BYTES = 5 * 1024 * 1024;\nconst result = [];\nconst input = $input.all();\nfor (let itemIndex = 0; itemIndex < input.length; itemIndex++) {\n  const item = input[itemIndex];\n  const category = String(item.json.category || 'general').trim() || 'general';\n  if (!/^[\\p{L}\\p{N}][\\p{L}\\p{N} _-]{0,63}$/u.test(category)) {\n    throw new Error('Category must be 1–64 letters, numbers, spaces, underscores, or hyphens.');\n  }\n  for (const [key, file] of Object.entries(item.binary || {})) {\n    const name = String(file.fileName || key).replace(/\\\\/g, '/').split('/').pop();\n    if (!/^[\\p{L}\\p{N}][\\p{L}\\p{N} ._-]{0,199}$/u.test(name)) {\n      throw new Error('Invalid filename. Use a name up to 200 characters without paths or control characters.');\n    }\n    const ext = name.split('.').pop().toLowerCase();\n    if (!['pdf', 'txt', 'md'].includes(ext)) throw new Error('Unsupported file: ' + name);\n    const bytes = await this.helpers.getBinaryDataBuffer(itemIndex, key);\n    if (!bytes.length || bytes.length > MAX_BYTES) {\n      throw new Error('File must be between 1 byte and 5 MiB: ' + name);\n    }\n    if (ext === 'pdf' && bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {\n      throw new Error('PDF header is missing: ' + name);\n    }\n    result.push({\n      json: {\n        fileName: name,\n        fileType: ext === 'pdf' ? 'pdf' : 'text',\n        mimeType: file.mimeType || '',\n        category,\n        sourceKey: JSON.stringify([category, name]),\n        fileBytes: bytes.length,\n        ingestedAt: new Date().toISOString(),\n      },\n      binary: { data: file },\n      pairedItem: { item: itemIndex },\n    });\n    if (result.length > MAX_FILES) throw new Error('Upload at most 3 files per submission.');\n  }\n}\nif (!result.length) throw new Error('No file was uploaded.');\nreturn result;"
+      },
+      "id": "edeac6a9-a8f9-4d7f-a291-fd78be146e02",
+      "name": "Split Uploaded Files",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.fileType }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "pdf"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "PDF"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 1
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.fileType }}",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "rightValue": "text"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Text"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a4c6c122-2d3a-4e80-a680-eb339b21a23e",
+      "name": "Route by File Type",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        448,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "options": {
+          "joinPages": true
+        }
+      },
+      "id": "84282bc2-0427-4b16-a2f4-f2051614da56",
+      "name": "Extract PDF Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        672,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const meta = $('Loop Over Files').item.json;\nlet text = String($json.text || $json.data || '');\ntext = text.replace(/\\r\\n?/g, '\\n')\n  .replace(/\\u0000/g, '')\n  .replace(/(\\w)-\\n(\\w)/g, '$1$2')\n  .replace(/[ \\t]+/g, ' ')\n  .replace(/ *\\n */g, '\\n')\n  .replace(/\\n{3,}/g, '\\n\\n').trim();\nif (text.length < 20) {\n  throw new Error('No extractable text in ' + meta.fileName + '; scanned PDFs need OCR.');\n}\nreturn { json: {\n  text,\n  source: meta.fileName,\n  sourceKey: meta.sourceKey,\n  fileType: meta.fileType,\n  category: meta.category,\n  ingestedAt: meta.ingestedAt,\n  charCount: text.length,\n} };"
+      },
+      "id": "309fc6e8-ca82-4774-a45e-9a5c11c576af",
+      "name": "Clean & Normalize Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "tableName": {
+          "__rl": true,
+          "mode": "id",
+          "value": "documents"
+        },
+        "options": {
+          "queryName": "match_documents"
+        }
+      },
+      "id": "84e25da6-14e3-412b-a215-3101504b5a89",
+      "name": "Index Chunks in Supabase",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreSupabase",
+      "typeVersion": 1.3,
+      "position": [
+        1120,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "options": {
+          "dimensions": 1536
+        },
+        "model": "text-embedding-3-small"
+      },
+      "id": "c694dfd2-675b-4c08-aeab-a93a63d503f6",
+      "name": "OpenAI Embeddings",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        1136,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "jsonMode": "expressionData",
+        "jsonData": "={{ $json.text }}",
+        "textSplittingMode": "custom",
+        "options": {
+          "metadata": {
+            "metadataValues": [
+              {
+                "name": "source",
+                "value": "={{ $json.source }}"
+              },
+              {
+                "name": "file_type",
+                "value": "={{ $json.file_type }}"
+              },
+              {
+                "name": "category",
+                "value": "={{ $json.category }}"
+              },
+              {
+                "name": "ingested_at",
+                "value": "={{ $json.ingested_at }}"
+              },
+              {
+                "name": "source_key",
+                "value": "={{ $json.source_key }}"
+              },
+              {
+                "name": "content_hash",
+                "value": "={{ $json.content_hash }}"
+              },
+              {
+                "name": "version_id",
+                "value": "={{ $json.version_id }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "8ad95375-e3e9-4121-a3b0-897bdfad2828",
+      "name": "Document Loader + Metadata",
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "typeVersion": 1.1,
+      "position": [
+        1264,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "chunkOverlap": 200,
+        "options": {},
+        "chunkSize": 1000
+      },
+      "id": "0d67660c-48e7-4476-a550-00585b19d986",
+      "name": "Recursive Chunker",
+      "type": "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
+      "typeVersion": 1,
+      "position": [
+        1264,
+        640
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "text",
+        "destinationKey": "text",
+        "options": {}
+      },
+      "id": "0924edec-a155-4c0c-a5dc-e720f50a8dc6",
+      "name": "Extract Plain Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1.1,
+      "position": [
+        672,
+        304
+      ]
+    },
+    {
+      "id": "d52eb35f-8337-42b4-ab05-49238341c149",
+      "name": "Loop Over Files",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -550,
+        180
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "5b2f2283-1c0d-4b24-a2ec-cdbe6cebdacc",
+      "name": "Check Document Version",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        390,
+        180
+      ],
+      "parameters": {
+        "resource": "database",
+        "operation": "executeQuery",
+        "query": "with incoming as (\n  select $1::text as text, $2::text as source_key, $3::text as source,\n         $4::text as category, $5::text as file_type, $6::text as ingested_at\n), hashed as (\n  select incoming.*, encode(sha256(convert_to(incoming.text, 'UTF8')), 'hex') as content_hash,\n         gen_random_uuid()::text as version_id\n  from incoming\n)\nselect h.*, coalesce(r.content_hash = h.content_hash, false) as duplicate\nfrom hashed h left join public.document_registry r on r.source_key = h.source_key",
+        "options": {
+          "queryReplacement": "={{ [$json.text, $json.sourceKey, $json.source, $json.category, $json.fileType, $json.ingestedAt] }}"
+        }
+      }
+    },
+    {
+      "id": "02ffc2b0-e398-4071-a789-eaff407d514e",
+      "name": "Already Indexed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        620,
+        180
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "f0fe292a-f42a-49f2-a43d-0097de204cc9",
+              "leftValue": "={{ $json.duplicate }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "12d7a905-2b35-429b-a8a3-0ba1704fdd4b",
+      "name": "Confirm Duplicate",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        860,
+        40
+      ],
+      "parameters": {
+        "resource": "database",
+        "operation": "executeQuery",
+        "query": "select $1::text as source, $2::text as category,\n  case when r.content_hash = $4::text then 'duplicate' else 'conflict_retry' end as status,\n  case when r.content_hash = $4::text then r.chunk_count else null end as active_chunks\nfrom (select 1) one\nleft join public.document_registry r on r.source_key = $3::text",
+        "options": {
+          "queryReplacement": "={{ [$json.source, $json.category, $json.source_key, $json.content_hash] }}"
+        }
+      }
+    },
+    {
+      "id": "cfeae8aa-d33e-44c4-a435-4064a8717894",
+      "name": "Count Indexed Chunks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1170,
+        310
+      ],
+      "parameters": {
+        "jsCode": "// Supabase Vector Store emits one serialized document per prepared chunk,\n// after its insert call succeeds. One loop iteration contains one file.\nconst chunks = $input.all();\nif (!chunks.length) throw new Error('Vector store returned no chunks; activation cancelled.');\nconst first = chunks[0].json.metadata;\nif (!first?.source_key || !first?.content_hash || !first?.version_id) {\n  throw new Error('Indexed chunks are missing version metadata.');\n}\nfor (const chunk of chunks) {\n  const meta = chunk.json.metadata;\n  if (!meta || meta.source_key !== first.source_key ||\n      meta.content_hash !== first.content_hash || meta.version_id !== first.version_id ||\n      !String(chunk.json.pageContent || '').trim()) {\n    throw new Error('Inconsistent indexed chunk output; activation cancelled.');\n  }\n}\nreturn [{ json: { source: first.source, category: first.category,\n  source_key: first.source_key, content_hash: first.content_hash,\n  version_id: first.version_id, expected_chunks: chunks.length } }];"
+      }
+    },
+    {
+      "id": "26cd487d-d4f5-4efb-a6af-a2f5535b1382",
+      "name": "Activate Document Version",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1390,
+        310
+      ],
+      "parameters": {
+        "resource": "database",
+        "operation": "executeQuery",
+        "query": "select $1::text as source, $2::text as category, a.status, a.active_chunks\nfrom rag_private.activate_document($3::text, $4::text, $5::uuid, $6::integer) a",
+        "options": {
+          "queryReplacement": "={{ [$json.source, $json.category, $json.source_key, $json.content_hash, $json.version_id, $json.expected_chunks] }}"
+        }
+      }
+    },
+    {
+      "id": "aa7705c0-bb13-4c63-a3a7-fc841358238e",
+      "name": "Summarize Upload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -300,
+        -40
+      ],
+      "parameters": {
+        "jsCode": "const files = $input.all().map(item => item.json);\nreturn [{ json: { files, inserted: files.filter(f => f.status === 'inserted').length,\n  replaced: files.filter(f => f.status === 'replaced').length,\n  duplicate: files.filter(f => f.status === 'duplicate').length,\n  conflict_retry: files.filter(f => f.status === 'conflict_retry').length } }];"
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Upload Documents Form": {
+      "main": [
+        [
+          {
+            "node": "Split Uploaded Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Uploaded Files": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by File Type": {
+      "main": [
+        [
+          {
+            "node": "Extract PDF Text",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Extract Plain Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract PDF Text": {
+      "main": [
+        [
+          {
+            "node": "Clean & Normalize Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clean & Normalize Text": {
+      "main": [
+        [
+          {
+            "node": "Check Document Version",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Embeddings": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Index Chunks in Supabase",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Document Loader + Metadata": {
+      "ai_document": [
+        [
+          {
+            "node": "Index Chunks in Supabase",
+            "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recursive Chunker": {
+      "ai_textSplitter": [
+        [
+          {
+            "node": "Document Loader + Metadata",
+            "type": "ai_textSplitter",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Plain Text": {
+      "main": [
+        [
+          {
+            "node": "Clean & Normalize Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Files": {
+      "main": [
+        [
+          {
+            "node": "Summarize Upload",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Route by File Type",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Document Version": {
+      "main": [
+        [
+          {
+            "node": "Already Indexed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Already Indexed?": {
+      "main": [
+        [
+          {
+            "node": "Confirm Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Index Chunks in Supabase",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Confirm Duplicate": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Index Chunks in Supabase": {
+      "main": [
+        [
+          {
+            "node": "Count Indexed Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Count Indexed Chunks": {
+      "main": [
+        [
+          {
+            "node": "Activate Document Version",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Activate Document Version": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "tags": []
+}

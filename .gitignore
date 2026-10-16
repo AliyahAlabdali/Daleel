@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.*
+!.env.example
+*.local.json
+*.log
+results.json
+data/
+tmp/
+.n8n/
+.supabase/
+# Local source exports retain n8n credential, workflow, and webhook identifiers.
+/RAG _ 1. Document Ingestion & Indexing.json
+/RAG _ 2. Conversational AI Assistant.json
