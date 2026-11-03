@@ -1,0 +1,19 @@
+Project Nakheel: Status Brief
+
+Project Nakheel moves customer support for the Riyadh and Jeddah branches to a new ticketing system.
+
+Project manager: Noura Alqahtani
+Start date: 2 March 2026
+Target launch: 14 December 2026
+Approved budget: SAR 450,000
+Spent to date: SAR 171,000
+Team size: 5
+
+Current phase
+Integration with the vendor and testing the migration of old tickets. Tickets from the old system are imported every week.
+
+Main risk
+The old system's export does not include attachment details. Tickets created before 2023 will be updated by hand.
+
+Next milestone
+A two-week pilot with the Jeddah billing team, then a go or no-go review.

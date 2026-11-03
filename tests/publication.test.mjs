@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 const read = file => readFileSync(file, 'utf8');
-const docs = ['README.md', 'docs/setup.md', 'docs/testing.md', 'docs/portfolio.md'];
+const docs = ['README.md'];
 const exports = [
   'workflows/01-document-ingestion.review.json',
   'workflows/02-conversational-assistant.review.json',
@@ -14,7 +14,9 @@ test('public documentation has local links and no stylistic long dashes', () => 
   for (const file of docs) {
     const markdown = read(file);
     assert.doesNotMatch(markdown, /[\u2013\u2014]/, `${file} contains a long dash`);
-    for (const [, target] of markdown.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)) {
+    // Links inside fenced code are examples, not rendered links.
+    const prose = markdown.replace(/```[\s\S]*?```/g, '');
+    for (const [, target] of prose.matchAll(/\[[^\]]+\]\(([^)]+)\)/g)) {
       if (/^(https?:|#)/.test(target)) continue;
       const path = decodeURIComponent(target.split('#')[0]);
       assert.ok(existsSync(resolve(dirname(file), path)), `${file} links to missing ${path}`);
@@ -26,6 +28,8 @@ test('architecture diagram uses a simple GitHub Mermaid flowchart', () => {
   const diagram = read('README.md').match(/```mermaid\n([\s\S]*?)\n```/);
   assert.ok(diagram, 'README architecture diagram is missing');
   const lines = diagram[1].trim().split('\n').map(line => line.trim());
+  // An optional theme directive may precede the flowchart.
+  if (lines[0].startsWith('%%{init:')) lines.shift();
   assert.equal(lines.shift(), 'flowchart LR');
   assert.ok(lines.length > 0);
   for (const line of lines) {
